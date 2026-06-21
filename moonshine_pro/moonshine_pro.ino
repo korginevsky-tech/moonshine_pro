@@ -31,6 +31,11 @@
 #define DEFAULT_KI 0.5
 #define DEFAULT_KD 1.0
 
+// СКОРОСТИ ОТБОРА ФРАКЦИЙ (%)
+#define DEFAULT_HEAD_SPEED 15    // Голова
+#define DEFAULT_BODY_SPEED 25    // Тело
+#define DEFAULT_TAILS_SPEED 8    // Хвосты
+
 // ==================== СТРУКТУРЫ ДАННЫХ ====================
 
 struct SensorInfo {
@@ -54,6 +59,12 @@ struct SystemState {
   bool alarmActive;
 };
 
+struct OutletSpeeds {
+  int head;
+  int body;
+  int tails;
+};
+
 // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 
 OneWire oneWire(TEMP_SENSOR_PIN);
@@ -65,6 +76,7 @@ SensorInfo sensorList[MAX_SENSORS];
 int sensorCount = 0;
 
 SystemState state;
+OutletSpeeds outletSpeeds;
 
 struct PIDController {
   float kp;
@@ -116,6 +128,10 @@ void initStructures() {
   tsargaMonitor.lastTemp = 0.0;
   tsargaMonitor.lastCheck = 0;
   tsargaMonitor.stabilityCount = 0;
+
+  outletSpeeds.head = DEFAULT_HEAD_SPEED;
+  outletSpeeds.body = DEFAULT_BODY_SPEED;
+  outletSpeeds.tails = DEFAULT_TAILS_SPEED;
 }
 
 void initSPIFFS() {
@@ -132,7 +148,14 @@ void initPreferences() {
   pidController.kp = preferences.getFloat("kp", DEFAULT_KP);
   pidController.ki = preferences.getFloat("ki", DEFAULT_KI);
   pidController.kd = preferences.getFloat("kd", DEFAULT_KD);
+  
+  outletSpeeds.head = preferences.getInt("headSpeed", DEFAULT_HEAD_SPEED);
+  outletSpeeds.body = preferences.getInt("bodySpeed", DEFAULT_BODY_SPEED);
+  outletSpeeds.tails = preferences.getInt("tailsSpeed", DEFAULT_TAILS_SPEED);
+  
   Serial.printf("✅ Preferences loaded\n");
+  Serial.printf("   Голова: %d%%, Тело: %d%%, Хвосты: %d%%\n", 
+    outletSpeeds.head, outletSpeeds.body, outletSpeeds.tails);
 }
 
 void scanSensors() {
@@ -281,9 +304,9 @@ void resetTsargaCalibration() {
 void setOutletMode(const char* mode) {
   strcpy(state.outletMode, mode);
   if (strcmp(mode, "off") == 0) setOutletSpeed(0);
-  else if (strcmp(mode, "head") == 0) setOutletSpeed(60);
-  else if (strcmp(mode, "body") == 0) setOutletSpeed(100);
-  else if (strcmp(mode, "tails") == 0) setOutletSpeed(30);
+  else if (strcmp(mode, "head") == 0) setOutletSpeed(outletSpeeds.head);
+  else if (strcmp(mode, "body") == 0) setOutletSpeed(outletSpeeds.body);
+  else if (strcmp(mode, "tails") == 0) setOutletSpeed(outletSpeeds.tails);
 }
 
 void autoSwitchOutletMode() {
@@ -424,6 +447,9 @@ void handleStatus() {
   json["outlet_mode"] = state.outletMode;
   json["alarm"] = state.alarmActive;
   json["readings_count"] = readingsCount;
+  json["head_speed"] = outletSpeeds.head;
+  json["body_speed"] = outletSpeeds.body;
+  json["tails_speed"] = outletSpeeds.tails;
   String response;
   serializeJson(json, response);
   server.send(200, "application/json", response);
@@ -465,6 +491,29 @@ void handleSetOutletSpeed() {
   }
 }
 
+void handleSetOutletSpeeds() {
+  if (server.hasArg("head") && server.hasArg("body") && server.hasArg("tails")) {
+    int head = server.arg("head").toInt();
+    int body = server.arg("body").toInt();
+    int tails = server.arg("tails").toInt();
+    
+    outletSpeeds.head = constrain(head, 0, 100);
+    outletSpeeds.body = constrain(body, 0, 100);
+    outletSpeeds.tails = constrain(tails, 0, 100);
+    
+    preferences.putInt("headSpeed", outletSpeeds.head);
+    preferences.putInt("bodySpeed", outletSpeeds.body);
+    preferences.putInt("tailsSpeed", outletSpeeds.tails);
+    
+    Serial.printf("✅ Скорости обновлены: Голова=%d%%, Тело=%d%%, Хвосты=%d%%\n", 
+      outletSpeeds.head, outletSpeeds.body, outletSpeeds.tails);
+    
+    server.send(200, "text/plain", "OK");
+  } else {
+    server.send(400, "text/plain", "Missing arguments");
+  }
+}
+
 void handleResetTsarga() {
   resetTsargaCalibration();
   server.send(200, "text/plain", "OK");
@@ -494,6 +543,7 @@ void setupWebServer() {
   server.on("/api/set_heater", handleSetHeater);
   server.on("/api/set_outlet_mode", handleSetOutletMode);
   server.on("/api/set_outlet_speed", handleSetOutletSpeed);
+  server.on("/api/set_outlet_speeds", handleSetOutletSpeeds);
   server.on("/api/reset_tsarga", handleResetTsarga);
   server.on("/api/history", handleHistory);
   server.on("/api/clear", handleClear);
